@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include "bt_master.h"
 
 #define FACE_SENSOR_PIN 0      // 예시 핀 번호
 #define BUTTON_PIN 1
@@ -12,9 +13,15 @@
 #define BUZZER_PIN 3
 #define TRIG_PIN 4
 #define ECHO_PIN 5
+#define SPI_CH 0
+#define ADC_CS 29
+#define SPI_SPEED 500000
 #define TEMP_SENSOR_CH 0
 #define SOUND_SENSOR_CH 1
 #define HUMID_SENSOR_CH 2
+#define TEMP_THRESHOLD 30
+#define HUMID_THRESHOLD 70
+#define NOISE_THRESHOLD 70
 
 bool user_authenticated = false;
 bool focus_mode = false;
@@ -28,6 +35,7 @@ int temp_sum = 0;
 int humid_sum = 0;
 int noise_sum = 0;
 int env_sample_count = 0;
+int bt_client = -1;
 
 int readADC(int adcChannel) {  // 외부 ADC 값 읽는 함수
     unsigned char buf[3];
@@ -53,16 +61,23 @@ void setup() {
         exit(1);
     }
 
+    if (wiringPiSPISetup(SPI_CH, SPI_SPEED) < 0) {
+    printf("❌ SPI 초기화 실패\n");
+    exit(1);
+    }
     pinMode(FACE_SENSOR_PIN, INPUT);
     pinMode(BUTTON_PIN, INPUT);
     pinMode(LED_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(ECHO_PIN, INPUT);
+    pinMode(ADC_CS, OUTPUT);
 
     digitalWrite(TRIG_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
     digitalWrite(BUZZER_PIN, LOW);
+    digitalWrite(ADC_CS, 1);  // CS 기본 HIGH
+
 }
 
 void turn_on_led() {
@@ -73,9 +88,16 @@ void turn_off_led() {
     digitalWrite(LED_PIN, LOW);
 }
 
+bool face_recognition() {
+    // 실제 구현 시 얼굴 인식 알고리즘 추가 (OpenCV 등)
+    // 시뮬레이션용: 항상 true 반환
+    printf("😀 얼굴 인식 시뮬레이션: 인증 성공\n");
+    return true;
+}
+
 bool button_pressed() {
     if (digitalRead(BUTTON_PIN) == LOW) {  // 버튼 눌림 감지
-        delay(200);  // 디바운스 처리
+        delay(100);  // 디바운스 처리
         while (digitalRead(BUTTON_PIN) == LOW); // 손 뗄 때까지 대기
         return true;
     }
@@ -85,7 +107,7 @@ bool button_pressed() {
 void activate_buzzer() {
     digitalWrite(BUZZER_PIN, HIGH);
     printf("🔔 부저 작동 (2초)\n");
-    delay(20000); // 2초 울림
+    delay(2000); // 2초 울림
     digitalWrite(BUZZER_PIN, LOW);
 }
 
@@ -100,17 +122,37 @@ int read_distance() {
     delayMicroseconds(10); // 최소 10μs
     digitalWrite(TRIG_PIN, LOW);
 
-    // ECHO 핀에서 HIGH 신호 대기 (신호 시작 시간 측정)
-    while (digitalRead(ECHO_PIN) == LOW);
+    // ECHO 핀 HIGH 대기 (최대 1초 = 1,000,000us)
+    int timeout = 1000000;
+    while (digitalRead(ECHO_PIN) == LOW && timeout-- > 0) {
+        delayMicroseconds(1);
+    }
+    if (timeout <= 0) {
+        printf("❌ 거리 측정 실패: ECHO 핀 HIGH 대기 시간 초과\n");
+        return -1;
+    }
+
     start_time = micros();
 
-    // ECHO 핀 LOW 될 때까지 대기 (신호 끝 시간 측정)
-    while (digitalRead(ECHO_PIN) == HIGH);
+    // ECHO 핀 LOW 대기 (최대 1초)
+    timeout = 1000000;
+    while (digitalRead(ECHO_PIN) == HIGH && timeout-- > 0) {
+        delayMicroseconds(1);
+    }
+    if (timeout <= 0) {
+        printf("❌ 거리 측정 실패: ECHO 핀 LOW 대기 시간 초과\n");
+        return -1;
+    }
+
     end_time = micros();
 
-    // 왕복 시간 → 거리 계산 (초음파 속도 = 340 m/s)
     long travel_time = end_time - start_time;
-    distance = travel_time / 58.0; // cm 단위 (왕복)
+    distance = travel_time / 58.0; // cm
+
+    if (distance < 2 || distance > 400) {
+        printf("⚠️ 비정상 거리 측정값: %.2f cm (무시)\n", distance);
+        return -1;
+    }
 
     return (int)distance;
 }
@@ -203,8 +245,32 @@ void generate_focus_report() {
     }
 }
 
+void init_bluetooth_server_once() {
+    if (bt_client == -1) {
+        bt_client = init_server();
+        printf("✅ 블루투스 서버 연결 완료 (client socket: %d)\n", bt_client);
+    }
+}
+
+void bluetooth_notify_user(const char* message) {
+    if (bt_client != -1) {
+        write_server(bt_client, (char *)message);
+    } else {
+        printf("⚠ 블루투스 연결이 없습니다. 메시지 전송 실패\n");
+    }
+}
+
+void notify_admin(const char* message) {
+    char command[512];
+    snprintf(command, sizeof(command),
+             "curl -G --data-urlencode \"msg=%s\" http://localhost/alert_logger.php",
+             message);
+    system(command);
+}
+
 int main() {
     setup();
+    init_bluetooth_server_once();
 
     while (1) {
         // 1. 얼굴 인식
@@ -227,11 +293,11 @@ int main() {
         noise_time_min = 0;
         turn_on_led();
         printf("🎯 집중 모드 시작\n");
+        int unfocused_count = 0; // 연속 이탈 횟수 초기화
 
         while (focus_mode) {
             int focus_count = 0;
             int noise_count = 0;
-            int unfocused_count = 0; // 연속 이탈 횟수 초기화
 
             // 1분 측정 루프
             for (int i = 0; i < 60; i++) {
@@ -258,17 +324,17 @@ int main() {
                 char admin_msg[256] = "환경 경고 - ";
                 char user_msg[256] = "⚠ 환경 상태 이상: ";
 
-                if (temp > 30) {
+                if (temp > TEMP_THRESHOLD) {
                     strcat(admin_msg, "온도 초과 ");
                     strcat(user_msg, "온도↑ ");
                     env_issue = true;
                 }
-                if (humid > 70) {
+                if (humid > HUMID_THRESHOLD) {
                     strcat(admin_msg, "습도 초과 ");
                     strcat(user_msg, "습도↑ ");
                     env_issue = true;
                 }
-                if (noise > 70) {
+                if (noise > NOISE_THRESHOLD) {
                     strcat(admin_msg, "소음 초과 ");
                     strcat(user_msg, "소음↑ ");
                     env_issue = true;
@@ -302,6 +368,10 @@ int main() {
 
         // 리포트 출력
         generate_focus_report();
+        temp_sum = 0;
+        humid_sum = 0;
+        noise_sum = 0;
+        env_sample_count = 0;
         printf("📥 다음 사용자 대기 중...\n\n");
     }
 
