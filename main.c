@@ -24,6 +24,8 @@
 #define HUMID_THRESHOLD 70
 #define NOISE_THRESHOLD 70
 
+void bluetooth_notify_user(const char* message);
+
 bool user_authenticated = false;
 bool focus_mode = false;
 int focus_time_min = 0;
@@ -198,7 +200,7 @@ void bluetooth_notify_user(const char* message) {
 void notify_admin(const char* message) {
     char command[512];
     snprintf(command, sizeof(command),
-             "curl -G --data-urlencode \"msg=%s\" http://localhost/alert_logger.php",
+             "curl -G --data-urlencode \"msg=%s\" http://192.168.0.120/alert_logger.php",
              message);
     system(command);
 }
