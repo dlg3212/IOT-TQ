@@ -24,6 +24,8 @@
 #define HUMID_THRESHOLD 70
 #define NOISE_THRESHOLD 70
 
+void bluetooth_notify_user(const char* message);
+
 bool user_authenticated = false;
 bool focus_mode = false;
 int focus_time_min = 0;
@@ -35,6 +37,7 @@ int temp_sum = 0;
 int humid_sum = 0;
 int noise_sum = 0;
 int env_sample_count = 0;
+int bt_client = -1;
 
 int readADC(int adcChannel) {
     unsigned char buf[3];
@@ -181,20 +184,25 @@ void generate_focus_report() {
     }
 }
 
+void init_bluetooth_server_once() {
+    if (bt_client == -1) {
+        bt_client = init_server();
+        printf("✅ 블루투스 서버 연결 완료 (client socket: %d)\n", bt_client);
+    }
+}
+
+void bluetooth_notify_user(const char* message) {
+    if (bt_client != -1) {
+        write_server(bt_client, (char *)message);
+    }
+}
+
 void notify_admin(const char* message) {
     char command[512];
     snprintf(command, sizeof(command),
              "curl -G --data-urlencode \"msg=%s\" http://192.168.0.120/alert_logger.php",
              message);
     system(command);
-}
-
-void init_bluetooth_server_once() {
-    if (get_bt_client_fd() == -1) {
-        int client_fd = init_server();
-        set_bt_client_fd(client_fd);
-        printf("✅ 블루투스 서버 연결 완료 (client socket: %d)\n", client_fd);
-    }
 }
 
 int main() {
