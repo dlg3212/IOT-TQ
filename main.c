@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <wiringPi.h>
+#include <wiringPiSPI.h>
 #include <stdbool.h>
 #include <unistd.h>
 #include <string.h>
