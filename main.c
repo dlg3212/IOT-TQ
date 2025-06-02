@@ -138,8 +138,11 @@ bool is_user_focused() {
 }
 
 void read_environment(int* temperature, int* humidity, int* noise) {
-    *temperature = readADC(TEMP_SENSOR_CH) * 100 / 1023;
-    *humidity = readADC(HUMID_SENSOR_CH) * 100 / 1023;
+    float temp_voltage = readADC(TEMP_SENSOR_CH) * 3.3 / 1023.0;
+    float humid_voltage = readADC(HUMID_SENSOR_CH) * 3.3 / 1023.0;
+
+    *temperature = (int)(temp_voltage * 100);  // LM35 기준
+    *humidity = (int)(humid_voltage * 100 / 3.3);  // 0~3.3V → 0~100%
     *noise = readADC(SOUND_SENSOR_CH) / 10;
 }
 
@@ -225,6 +228,7 @@ int main() {
         bluetooth_notify_user("🎯 집중 모드 시작");
 
         int unfocused_count = 0;
+        time_t last_env_alert_time = 0;
 
         while (focus_mode) {
             int focus_count = 0;
@@ -270,9 +274,11 @@ int main() {
                     noise_count++;
                 }
 
-                if (env_issue) {
+                time_t now = time(NULL);
+                if (env_issue && difftime(now, last_env_alert_time) >= 10) {
                     notify_admin(admin_msg);
                     bluetooth_notify_user(user_msg);
+                    last_env_alert_time = now;
                 }
 
                 sleep(1);
