@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>📡 IoT 관리자 경고 알림</title>
+  <script>
+    async function fetchAlerts() {
+      const response = await fetch('alerts.log');
+      const text = await response.text();
+      document.getElementById("alerts").innerText = text;
+    }
+    setInterval(fetchAlerts, 5000); // 5초마다 새로고침
+  </script>
+</head>
+<body>
+  <h2>🚨 관리자 경고 로그</h2>
+  <pre id="alerts">불러오는 중...</pre>
+</body>
+</html>
